@@ -65,6 +65,8 @@
   .tool-btn:hover { background: #0f3460; color: #e0e0e0; }
   .tool-btn.active { background: #e94560; color: #fff; }
   .tool-btn:active { transform: scale(.93); }
+  .tool-btn:disabled { opacity: .3; cursor: not-allowed; }
+  .tool-btn:disabled:hover { background: transparent; color: #a0aec0; }
 
   .divider {
     width: 36px;
@@ -343,6 +345,25 @@
   </div>
 
   <div class="divider"></div>
+  <span class="sidebar-label">歷史</span>
+
+  <!-- Undo -->
+  <button class="tool-btn" id="btnUndo" title="返回 (Ctrl+Z)" disabled>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>
+    </svg>
+    返回
+  </button>
+
+  <!-- Redo -->
+  <button class="tool-btn" id="btnRedo" title="重做 (Ctrl+Y)" disabled>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/>
+    </svg>
+    重做
+  </button>
+
+  <div class="divider"></div>
 
   <!-- Download -->
   <button class="action-btn" id="downloadBtn" title="下載 PNG">
@@ -375,6 +396,48 @@ const canvas = document.getElementById('mainCanvas');
 const ctx = canvas.getContext('2d');
 const wrap = document.getElementById('canvasWrap');
 const statusBar = document.getElementById('statusBar');
+const btnUndo = document.getElementById('btnUndo');
+const btnRedo = document.getElementById('btnRedo');
+
+// ── History (undo/redo) ──
+const MAX_HISTORY = 50;
+let undoStack = [];  // ImageData[]
+let redoStack = [];  // ImageData[]
+
+function saveHistory() {
+  undoStack.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  redoStack = [];
+  updateHistoryButtons();
+}
+
+function updateHistoryButtons() {
+  btnUndo.disabled = undoStack.length === 0;
+  btnRedo.disabled = redoStack.length === 0;
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  redoStack.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+  ctx.putImageData(undoStack.pop(), 0, 0);
+  updateHistoryButtons();
+}
+
+function redo() {
+  if (redoStack.length === 0) return;
+  undoStack.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+  ctx.putImageData(redoStack.pop(), 0, 0);
+  updateHistoryButtons();
+}
+
+btnUndo.addEventListener('click', undo);
+btnRedo.addEventListener('click', redo);
+
+// Keyboard shortcuts
+window.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undo(); }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) { e.preventDefault(); redo(); }
+});
 
 // ── Aspect ratio ──
 let ratioW = 9, ratioH = 16;
@@ -390,11 +453,9 @@ function applyRatio(rw, rh, keepContent) {
     cw = areaW;
     ch = Math.floor(cw * rh / rw);
   }
-
   const tmp = document.createElement('canvas');
   tmp.width = canvas.width; tmp.height = canvas.height;
   tmp.getContext('2d').drawImage(canvas, 0, 0);
-
   canvas.width = cw;
   canvas.height = ch;
   ctx.fillStyle = '#ffffff';
@@ -414,22 +475,19 @@ document.querySelectorAll('.ratio-btn').forEach(btn => {
     const rw = parseInt(btn.dataset.w);
     const rh = parseInt(btn.dataset.h);
     if (rw === ratioW && rh === ratioH) return;
-
-    const confirmed = confirm(`切換畫布比例為 ${rw}:${rh}？\n畫布內容將會清除。`);
-    if (!confirmed) return;
-
+    if (!confirm(`切換畫布比例為 ${rw}:${rh}？\n畫布內容將會清除。`)) return;
     ratioW = rw; ratioH = rh;
     document.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     applyRatio(ratioW, ratioH, false);
+    undoStack = []; redoStack = [];
+    updateHistoryButtons();
     updateStatus();
   });
 });
 
-// Initial draw
+// Initial setup
 applyRatio(ratioW, ratioH, false);
-
-// Resize window → keep ratio
 window.addEventListener('resize', () => applyRatio(ratioW, ratioH, true));
 
 // ── State ──
@@ -473,8 +531,8 @@ Object.entries(toolMap).forEach(([id, t]) => {
     document.getElementById(id).classList.add('active');
     if (t === 'shape') { shapePanel.classList.toggle('open'); }
     else { shapePanel.classList.remove('open'); }
-    // keep ratio panel state
     if (ratioPanel.classList.contains('open')) document.getElementById('btnRatio').classList.add('active');
+    updateHistoryButtons();
     updateStatus();
   });
 });
@@ -495,7 +553,9 @@ document.getElementById('shapeCircle').addEventListener('click', () => {
 function updateStatus() {
   const name = toolNames[tool] || tool;
   const extra = tool === 'shape' ? (shape === 'rect' ? ' · 矩形' : ' · 橢圓') : '';
-  statusBar.textContent = name + extra + ' · ' + getSize() + 'px · ' + ratioW + ':' + ratioH;
+  const u = undoStack.length, r = redoStack.length;
+  const hist = u > 0 || r > 0 ? ` · ↩${u} ↪${r}` : '';
+  statusBar.textContent = name + extra + ' · ' + getSize() + 'px · ' + ratioW + ':' + ratioH + hist;
 }
 brushSize.addEventListener('input', updateStatus);
 
@@ -540,6 +600,8 @@ function onStart(e) {
   drawing = true;
   [lastX, lastY] = getPos(e);
   startX = lastX; startY = lastY;
+  // Save history BEFORE drawing stroke
+  saveHistory();
   if (tool === 'line' || tool === 'shape') {
     snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
   }
@@ -579,6 +641,7 @@ function onEnd(e) {
   } else if (tool === 'shape') {
     drawShape(startX, startY, x, y);
   }
+  updateStatus();
 }
 
 canvas.addEventListener('mousedown', onStart);
@@ -592,8 +655,10 @@ canvas.addEventListener('touchend', onEnd, {passive:false});
 // ── Clear ──
 document.getElementById('clearBtn').addEventListener('click', () => {
   if (!confirm('確定要清除畫布嗎？')) return;
+  saveHistory();
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  updateStatus();
 });
 
 // ── Download (iOS-friendly) ──
